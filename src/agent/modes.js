@@ -29,6 +29,10 @@ const modes_list = [
         on: true,
         active: false,
         fall_blocks: ['sand', 'gravel', 'concrete_powder'], // includes matching substrings like 'sandstone' and 'red_sand'
+        water_position: null,
+        water_start_time: null,
+        last_lateral_move: 0,
+        lateral_move_cooldown: 2000, // 3 seconds between lateral moves
         update: async function (agent) {
             const bot = agent.bot;
             let block = bot.blockAt(bot.entity.position);
@@ -36,12 +40,49 @@ const modes_list = [
             if (!block) block = {name: 'air'}; // hacky fix when blocks are not loaded
             if (!blockAbove) blockAbove = {name: 'air'};
             if (blockAbove.name === 'water') {
-                // does not call execute so does not interrupt other actions
-                if (!bot.pathfinder.goal) {
-                    bot.setControlState('jump', true);
+                console.log(`${(new Date).toISOString()}: DETECTED WATER`);
+
+                // Track position and time when first entering water
+                if (!this.water_position) {
+                    this.water_position = bot.entity.position.clone();
+                    this.water_start_time = Date.now();
                 }
+
+                // Check if bot has been in water for more than 2 seconds and is stuck in same spot
+                const timeInWater = Date.now() - this.water_start_time;
+                const distanceFromWaterStart = this.water_position.distanceTo(bot.entity.position);
+                const canMoveNow = Date.now() - this.last_lateral_move > this.lateral_move_cooldown;
+
+                console.log(`timeInWater: ${timeInWater}, distanceFromWaterStart: ${distanceFromWaterStart}, canMoveNow: ${canMoveNow}`)
+
+                if (timeInWater > 2000 && distanceFromWaterStart < 1.5 && canMoveNow) {
+                    // Bot is stuck in water, try lateral movement
+                    console.log(`${(new Date).toISOString()}: Bot stuck in water at same position, attempting lateral movement`);
+                    this.last_lateral_move = Date.now();
+                    execute(this, agent, async () => {
+                        // Try moving in a random horizontal direction
+                        const angle = Math.random() * Math.PI * 2;
+                        const x = Math.cos(angle) * 2;
+                        const z = Math.sin(angle) * 2;
+                        const targetPos = bot.entity.position.offset(x, 0, z);
+                        await skills.goToPosition(bot, targetPos.x, targetPos.y, targetPos.z, 0.5);
+                        // await skills.moveAway(bot, 2);
+
+                        this.water_position = bot.entity.position; 
+                    });
+                } else {
+                    // Normal jumping behavior
+                    if (!bot.pathfinder.goal) {
+                        bot.setControlState('jump', true);
+                    }
+                }
+                return;
             }
-            else if (this.fall_blocks.some(name => blockAbove.name.includes(name))) {
+            // Reset water tracking when not in water
+            this.water_position = null;
+            this.water_start_time = null;
+
+            if (this.fall_blocks.some(name => blockAbove.name.includes(name))) {
                 execute(this, agent, async () => {
                     await skills.moveAway(bot, 2);
                 });
